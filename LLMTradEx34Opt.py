@@ -26,7 +26,7 @@ PATH = "/stock/investinfo"
 URL = f"{BASE_URL}{PATH}"
 
 # Access Token (발급받은 토큰 입력)
-ACCESS_TOKEN = os.getenv('LS_ACCESS_TOKEN') # "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJ0b2tlbiIsImF1ZCI6IjM4NTEwZTYzLWY5ZDMtNDg5My05ZWU2LTY3NTQ2YWIzZjE0ZCIsIm5iZiI6MTc2NDczODI4OSwiZ3JhbnRfdHlwZSI6IkNsaWVudCIsImlzcyI6InVub2d3IiwiZXhwIjoxNzY0Nzk5MTk5LCJpYXQiOjE3NjQ3MzgyODksImp0aSI6IlBTM1BjRGpCdXFWMjZHWnlwWFppOFBBZnQ5Q3pqUUNEc1VqOCJ9.B7gBJ9znjabLbwxwRK-ijCTtb0xC8hRShRCUJloD6bgGuWix6giy4fK7clxwWMYKejMo6sWr5RaGYD5me5PUUw"
+ACCESS_TOKEN = os.getenv('LS_ACCESS_TOKEN') 
 
 WS_URL = "wss://openapi.ls-sec.co.kr:9443/websocket"
 API_BASE_URL = "https://openapi.ls-sec.co.kr:8080"
@@ -776,4 +776,5 @@ scenarios = [market_scenario_to_tuple(market_scenario)] # 시나리오 튜블 �
 for i, (name, view, risk_level) in enumerate(scenarios, 1):
     print(f"\n🚀 [Scenario {i}: {name}]")
     run_simulation(view, risk_level)
+
 
