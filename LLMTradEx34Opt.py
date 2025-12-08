@@ -204,11 +204,11 @@ def portfolio_optimizer(state: QuantState):
         # (4) [NEW] 헤지 비율 40% 이하 (수익성 보존)
         {'type': 'ineq', 'fun': lambda x: 0.40 - np.sum([x[i] for i in hedge_indices])},
 
-        # (5) [추가] Deep OTM Call Long (인덱스 0) 비중 최대 5% 제한
-        {'type': 'ineq', 'fun': lambda x: 0.15 - x[0]}, # x[0] <= 0.15
+        # (5) [추가] Deep OTM Call Long (인덱스 0) 비중 최대 20% 제한
+        {'type': 'ineq', 'fun': lambda x: 0.20 - x[0]}, # x[0] <= 0.20
 
-        # (6) [추가] Deep OTM Put Long (인덱스 2) 비중 최대 5% 제한
-        {'type': 'ineq', 'fun': lambda x: 0.15 - x[2]}, # x[2] <= 0.15
+        # (6) [추가] Deep OTM Put Long (인덱스 2) 비중 최대 20% 제한
+        {'type': 'ineq', 'fun': lambda x: 0.20 - x[2]}, # x[2] <= 0.20
     ]
 
     bounds = tuple((0.0, 1.0) for _ in range(n + 1))
@@ -389,4 +389,5 @@ scenarios = [
 for i, (name, view, risk_level) in enumerate(scenarios, 1):
     print(f"\n🚀 [Scenario {i}: {name}]")
     run_simulation(view, risk_level)
+
 
