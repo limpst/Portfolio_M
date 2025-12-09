@@ -62,7 +62,7 @@ except Exception as e:
 OPEN_AI_KEY = os.getenv('OPEN_AI_KEY')
 # os.environ["OPENAI_API_KEY"] = OPEN_AI_KEY
 
-llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.0, api_key=OPEN_AI_KEY)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, api_key=OPEN_AI_KEY)
 
 
 # 자산 정의
