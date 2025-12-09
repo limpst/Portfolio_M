@@ -17,6 +17,8 @@ from mysql.connector import pooling
 from html import unescape
 from LLMTradEx34ScenarioScore import MarketScenario
 
+import torch
+
 from keywords import (
     MACRO_KEYWORDS,
     GLOBAL_KEYWORDS,
@@ -90,17 +92,30 @@ llm_lock = threading.Lock()
 
 llmSum = ChatLlamaCpp(
     model_path=model_pathSum,
+    n_gpu_layers=-1,  # GPU에서 처리할 레이어 수   # GPU 없으면 0, GPU 있으면 10~20으로 올려도 됨
+    n_batch=1024,  # 배치 크기 줄여 메모리 피크 완화
+    n_ctx=4096,  # 1536,  # 7B에 4096은 무거우므로 1536 선에서 타협
     # 7B + CPU: 너무 높지 않게 (물리 코어 50~70% 수준, 최대 6)
-    n_threads=max(1, min(6, optimal_threads)),
     temperature=0.1,
-    max_tokens=512,        # 출력 최대 길이
-    n_ctx=1536,            # 7B에 4096은 무거우므로 1536 선에서 타협
+    max_tokens=512,     # 출력 최대 길이
     repeat_penalty=1.15,
-    n_batch=256,           # 배치 크기 줄여 메모리 피크 완화
     verbose=False,
-    n_gpu_layers=2,        # GPU 없으면 0, GPU 있으면 10~20으로 올려도 됨
+    streaming=False,
     stop=["<|im_end|>", "<|endoftext|>", "<|end_of_text|>"]
 )
+
+
+# VRAM 사용량 확인 함수 추가
+def check_vram_usage():
+    if torch.cuda.is_available():
+        print(f"🖥️  GPU: {torch.cuda.get_device_name(0)}")
+        print(f"📊 Allocated VRAM: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        print(f"📦 Reserved VRAM:  {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
+    else:
+        print("⚠️ CUDA GPU가 감지되지 않았습니다.")
+
+# 초기 VRAM 상태 확인
+check_vram_usage()
 
 # ==========================================
 # 3. 유틸리티 함수 (정제, 병합, DB)
@@ -212,18 +227,16 @@ def insert_to_db(data):
         if conn.is_connected():
             cursor = conn.cursor()
             insert_query = """
-                INSERT INTO news_data (
-                    date,
-                    time,
-                    id,
-                    realkey,
-                    title,
-                    bodysize,
-                    category,
-                    body
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-            """
+                           INSERT INTO news_data (date,
+                                                  time,
+                                                  id,
+                                                  realkey,
+                                                  title,
+                                                  bodysize,
+                                                  category,
+                                                  body)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s); \
+                           """
             cursor.execute(insert_query, data)
             conn.commit()
     except mysql.connector.Error as err:
@@ -231,6 +244,7 @@ def insert_to_db(data):
     finally:
         if conn:
             conn.close()
+
 
 # ==========================================
 # 4. 키워드 기반 1차 분류 (속도 향상 핵심)
@@ -247,6 +261,7 @@ def quick_keyword_classify(title: str) -> str | None:
     if any(k in t for k in ETC_KEYWORDS):
         return "기타"
     return None
+
 
 # ==========================================
 # 5. 요약 + 분류 통합 LLM 호출 (안정성 튜닝)
@@ -268,9 +283,8 @@ def summarize_and_classify(text: str, title: str) -> tuple[str, str]:
     # 1차: 키워드 분류 (빠른 경로)
     kw_category = quick_keyword_classify(title)
 
-
     # 청크 크기를 키워 호출 횟수 감소
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=100)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=100)
     chunks = text_splitter.split_text(text)
 
     def _llm_summary_single(chunk_text: str) -> str:
@@ -417,18 +431,22 @@ def refine_financial_structure(text: str) -> str:
 
     return result
 
+def get_headers(tr_cd, tr_cont="N"):
+    """헤더 생성 헬퍼 함수"""
+    return {
+        "Content-Type": "application/json; charset=UTF-8",
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "tr_cd": tr_cd,
+        "tr_cont": tr_cont,
+        "mac_address": "00:11:22:33:44:55"
+    }
+
 
 def fetch_news_body(news_id):
     """REST API를 통해 뉴스 상세 본문 조회"""
     url = f"{API_BASE_URL}/stock/investinfo"
 
-    headers = {
-        "Content-Type": "application/json; charset=UTF-8",
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "tr_cd": "t3102",
-        "tr_cont": "N",
-        "mac_address": "00:11:22:33:44:55"
-    }
+    headers = get_headers("t3102")
 
     data = {
         "t3102InBlock": {
@@ -467,6 +485,7 @@ def fetch_news_body(news_id):
 
     return None
 
+
 # ==========================================
 # 7. 워커 스레드 (멀티 워커, 빠른 처리)
 # ==========================================
@@ -503,7 +522,7 @@ def worker():
             raw_body = fetch_news_body(realkey)
 
             if raw_body:
-                cleaned_body = raw_body # clean_text(raw_body)
+                cleaned_body = raw_body  # clean_text(raw_body)
 
                 # debug: 본문 출력 유지
                 print("\n뉴스 본문:")
@@ -539,6 +558,7 @@ def worker():
         except Exception as e:
             print(f"\n❌ 워커 처리 중 에러: {e}")
 
+
 # ==========================================
 # 8. WebSocket 이벤트 핸들러
 # ==========================================
@@ -573,6 +593,7 @@ def on_open(ws):
     }
     ws.send(json.dumps(sub_msg))
 
+
 # ==========================================
 # 9. 메인 실행부
 # ==========================================
@@ -605,4 +626,3 @@ if __name__ == "__main__":
             news_queue.put(None)
         for t in worker_threads:
             t.join()
-
