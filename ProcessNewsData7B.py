@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from mysql.connector import pooling
 from html import unescape
+from LLMTradEx34ScenarioScore import MarketScenario
 
 from keywords import (
     MACRO_KEYWORDS,
@@ -22,6 +23,7 @@ from keywords import (
     DOMESTIC_MARKET_KEYWORDS,
     ETC_KEYWORDS,
 )
+
 # ==========================================
 # 0. 환경 변수 및 기본 설정
 # ==========================================
@@ -180,7 +182,6 @@ def clean_base_text(text: str) -> str:
     text = re.sub(r'[^\w\s.,\'"()%\+/\-▲▼△▽↑↓]', '', text)
 
     return text
-
 
 
 def merge_news_bodies(news_bodies):
@@ -604,3 +605,4 @@ if __name__ == "__main__":
             news_queue.put(None)
         for t in worker_threads:
             t.join()
+
