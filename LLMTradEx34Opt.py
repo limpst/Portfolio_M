@@ -25,11 +25,9 @@ BASE_URL = "https://openapi.ls-sec.co.kr:8080"
 PATH = "/stock/investinfo"
 URL = f"{BASE_URL}{PATH}"
 
-# Access Token (발급받은 토큰 입력)
-ACCESS_TOKEN = os.getenv('LS_ACCESS_TOKEN') 
-
 WS_URL = "wss://openapi.ls-sec.co.kr:9443/websocket"
 API_BASE_URL = "https://openapi.ls-sec.co.kr:8080"
+# Access Token (발급받은 토큰 입력)
 ACCESS_TOKEN = os.getenv("LS_ACCESS_TOKEN")
 
 
@@ -60,6 +58,23 @@ except Exception as e:
     print(f"❌ [System] DB Pool 생성 실패: {e}")
     exit(1)
 
+
+OPEN_AI_KEY = os.getenv('OPEN_AI_KEY')
+# os.environ["OPENAI_API_KEY"] = OPEN_AI_KEY
+
+llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.0, api_key=OPEN_AI_KEY)
+
+
+# 자산 정의
+TARGET_ASSETS = [
+    {"name": "Deep OTM Call Long"},  # 0. 상승 (볼록성)
+    {"name": "OTM Call Short"},  # 1. 하락/횡보 (수익/헤지)
+    {"name": "Deep OTM Put Long"},  # 2. 하락 (볼록성)
+    {"name": "OTM Put Short"}  # 3. 상승/횡보 (수익/헤지)
+]
+
+
+
 """
 # [수정 필요] -> 리포팅 단계에서 실시간 델타를 받아와야 정확한 방향성(Bull/Bear) 판단 가능,  # as of 20251209,0328
 real_delta = get_option_greeks(strike=..., type=...)['delta']
@@ -76,38 +91,24 @@ def fetch_option_price(focode):
         dict: 옵션 가격 관련 데이터
     """
     url = f"{API_BASE_URL}/futureoption/market-data"
-
-    # 요청 헤더 설정
     headers = get_headers("t2101")
-
-    # 요청 본문 설정
-    body = {
-        "t2101InBlock": {
-            "focode": focode
-        }
-    }
+    body = {"t2101InBlock": {"focode": focode}}
 
     try:
-        # API 호출
         response = requests.post(url, headers=headers, data=json.dumps(body), verify=False)
+        response.raise_for_status()  # HTTP 오류 확인
+        response_data = response.json()
 
-        # 응답 처리
-        if response.status_code == 200:
-            response_data = response.json()
-            if response_data.get("rsp_cd") == "00000":
-                print("✅ 정상적으로 조회가 완료되었습니다.")
-                option_data = response_data["t2101OutBlock"]
-                return option_data
-            else:
-                print(f"⚠️ API 오류: {response_data.get('rsp_msg')}")
-                return None
+        if response_data.get("rsp_cd") == "00000" and "t2101OutBlock" in response_data:
+            print("✅ 정상적으로 조회가 완료되었습니다.")
+            return response_data["t2101OutBlock"]
         else:
-            print(f"❌ HTTP 오류: {response.status_code}")
-            print(response.text)
-            return None
-    except Exception as e:
+            print(f"⚠️ API 오류: {response_data.get('rsp_msg', 'Unknown error')}")
+            return {"price": 0.0, "delt": 0.0}  # 기본값 반환
+
+    except (requests.RequestException, KeyError, ValueError) as e:
         print(f"⚠️ API 호출 중 오류 발생: {e}")
-        return None
+        return {"price": 0.0, "delt": 0.0}  # 기본값 반환
 
 
 def fetch_option_prices(strikes, atm) -> (List[float], List[float]):
@@ -130,7 +131,7 @@ def fetch_option_prices(strikes, atm) -> (List[float], List[float]):
             focode = f"301WC{int(strike)}"
 
         # 옵션 가격 조회
-        time.sleep(0.5)
+        time.sleep(1)
         option_data = fetch_option_price(focode)
         if option_data and "price" in option_data:
             # 가격 추출
@@ -147,14 +148,6 @@ def fetch_option_prices(strikes, atm) -> (List[float], List[float]):
 
     return prices, deltas
 
-# 자산 정의
-TARGET_ASSETS = [
-    {"name": "Deep OTM Call Long"},  # 0. 상승 (볼록성)
-    {"name": "OTM Call Short"},  # 1. 하락/횡보 (수익/헤지)
-    {"name": "Deep OTM Put Long"},  # 2. 하락 (볼록성)
-    {"name": "OTM Put Short"}  # 3. 상승/횡보 (수익/헤지)
-]
-
 
 
 class QuantState(TypedDict):
@@ -167,6 +160,7 @@ class QuantState(TypedDict):
     covariance_matrix: List[List[float]]
     optimal_weights: List[float]
     final_report: str
+    market_trend: str  # 시장 트랜드 추가
 
 
 def risk_score_to_phrase(score: float, trend: MarketTrend) -> str:
@@ -235,11 +229,6 @@ def risk_score_to_phrase(score: float, trend: MarketTrend) -> str:
     return f"{mood} {suffix} (약 {prob}% 수준)"
 
 
-OPEN_AI_KEY = os.getenv('OPEN_AI_KEY')
-# os.environ["OPENAI_API_KEY"] = OPEN_AI_KEY
-
-llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.0, api_key=OPEN_AI_KEY)
-
 #
 # model_id = "google/gemma-2-2b-it"
 # print(f"⏳ [System] 모델 로드 중: {model_id} (CPU Mode)...")
@@ -292,7 +281,7 @@ def fetch_latest_news(limit: int = 20):
     except mysql.connector.Error as err:
         print(f"❌ DB 조회 에러: {err}")
     finally:
-        if conn:
+        if conn and conn.is_connected():
             conn.close()
     return rows
 
@@ -385,7 +374,7 @@ def insert_market_scenario(market_scenario: MarketScenario):
     except mysql.connector.Error as err:
         print(f"❌ DB 에러: {err}")
     finally:
-        if conn:
+        if conn and conn.is_connected():
             conn.close()
 
 
@@ -545,6 +534,56 @@ def portfolio_optimizer(state: QuantState):
 
 
 
+def calculate_strikes(atm: float, risk_aversion: float, iv: float, market_trend: str) -> List[float]:
+    """
+    risk_aversion, 시장 변동성, 시장 트렌드에 따라 스트라이크를 다이내믹하게 계산합니다.
+
+    Args:
+        atm (float): ATM 기준값 (현재 KOSPI 200 지수)
+        risk_aversion (float): 위험 회피 성향 값 (2.0 ~ 10.0)
+        iv (float): 시장 변동성 (예: 15.0, 30.0)
+        market_trend (str): 시장 트렌드 (Bullish, Bearish, Neutral)
+
+    Returns:
+        List[float]: 계산된 스트라이크 리스트 (OTM 옵션만 포함)
+    """
+    # 변동성 및 risk_aversion 기반 간격 계산
+    base_interval = 5.0  # 기본 간격
+    interval = base_interval * (iv / 15.0) * (1 + (10.0 - risk_aversion) / 10.0)
+
+    # 시장 트렌드에 따른 스트라이크 조정 (ITM 옵션 제외)
+    if market_trend.lower() == "bullish":
+        strikes = [
+            atm + interval * 4,  # Deep OTM Call
+            atm + interval * 2,  # OTM Call
+            atm - interval * 3,  # Deep OTM Put
+            atm - interval * 2  # OTM Put
+        ]
+    elif market_trend.lower() == "bearish":
+        strikes = [
+            atm + interval * 3,  # OTM Call
+            atm + interval * 2,  # OTM Call
+            atm - interval * 4,  # Deep OTM Put
+            atm - interval * 3   # OTM Put
+        ]
+    else:  # Neutral
+        strikes = [
+            atm + interval * 3,  # OTM Call
+            atm + interval * 2,  # OTM Call
+            atm - interval * 3,  # OTM Put
+            atm - interval * 2  # OTM Put
+        ]
+
+    # 2.5 단위로 나누어 떨어지도록 조정
+    strikes = [round(strike / 2.5) * 2.5 for strike in strikes]
+
+    # 정수로 변환
+    strikes = [int(strike) for strike in strikes]
+
+    return strikes
+
+# strikes = calculate_strikes(590, 2.0)
+
 # ==========================================
 # 3. Node: Reporter
 # ==========================================
@@ -553,6 +592,9 @@ def execution_reporter(state: QuantState):
     capital = state['total_capital']
     weights = state['optimal_weights']
     view = state['manager_view']
+    risk_aversion = state['risk_aversion']
+    iv = state['market_iv']     # 시장 변동성
+    market_trend = state['market_trend']
 
     if not weights: return {"final_report": "Optimization Failed"}
 
@@ -560,7 +602,12 @@ def execution_reporter(state: QuantState):
     w_cash = weights[-1]
 
     atm = round(kospi / 2.5) * 2.5
-    strikes = [atm + 30.0, atm + 22.5, atm - 30.0, atm - 20]
+
+
+    # 스트라이크 계산 (risk_aversion, iv, market_trend 기반)
+    strikes = calculate_strikes(atm, risk_aversion, iv, market_trend)
+
+    # strikes = [atm + 30.0, atm + 22.5, atm - 30.0, atm - 20]
 
     prices, deltas = fetch_option_prices(strikes, atm)
 
@@ -625,12 +672,18 @@ def execution_reporter(state: QuantState):
         if pos_type == "Short":
             delta = -delta
 
+        price = prices[i]
+        if price <= 0:
+            print(f"⚠️ 옵션 가격 조회 실패 (Asset {TARGET_ASSETS[i]['name']}). 기본값 사용.")
+            continue
+
+
         # 가격이 0이거나 너무 작아서 나누기 오류가 나지 않도록 방지
         if prices[i] * MULTIPLIER == 0:
             qty = 0
             asset_premium_pnl = 0
         else:
-            qty = int((capital * w) / (prices[i] * MULTIPLIER))
+            qty = int((capital * w) / (price * MULTIPLIER)) if price > 0 else 0
 
             # 프리미엄 P&L 계산
             # Long 포지션은 프리미엄 지급 (음수), Short 포지션은 프리미엄 수취 (양수)
@@ -707,33 +760,38 @@ def get_kospi200_index():
     """
     url = f"{API_BASE_URL}/futureoption/market-data"
     headers = get_headers("t2101")
-
-    # shcode 101: KOSPI 200
-    data = {
-        "t2101InBlock": {
-            "focode": "101WC000"
-        }
-    }
+    data = {"t2101InBlock": {"focode": "101WC000"}}
 
     try:
         response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
-        if response.status_code == 200:
-            res_json = response.json()
-            if "t2101OutBlock" in res_json:
-                # jisu: 현재 지수
-                return float(res_json["t2101OutBlock"]["kospijisu"])
+        response.raise_for_status()
+
+        res_json = response.json()
+        return float(res_json["t2101OutBlock"]["kospijisu"])
     except Exception as e:
         print(f"⚠️ KOSPI 200 지수 조회 실패: {e}")
+        return 0.0  # 기본값 반환
 
-    return None
 
 def run_simulation(view_text: str, risk_level: float = 3.0):
     kospi_index = get_kospi200_index()
+    if kospi_index == 0:
+        print("⚠️ KOSPI 200 지수를 가져오지 못해 시뮬레이션을 건너뜁니다.")
+        return
+
+    # 시장 트렌드 해석 (Bullish, Bearish, Neutral)
+    if "bull" in view_text.lower():
+        market_trend = "Bullish"
+    elif "bear" in view_text.lower():
+        market_trend = "Bearish"
+    else:
+        market_trend = "Neutral"
 
     inputs = {
         "kospi_index": kospi_index, "market_iv": 27.35, "total_capital": 5_000_000, ### 시장 데이터 입수
         "manager_view": view_text, "risk_aversion": risk_level,
-        "expected_returns": [], "covariance_matrix": [], "optimal_weights": [], "final_report": ""
+        "expected_returns": [], "covariance_matrix": [], "optimal_weights": [], "final_report": "",
+        "market_trend" : market_trend
     }
 
     try:
@@ -776,5 +834,4 @@ scenarios = [market_scenario_to_tuple(market_scenario)] # 시나리오 튜블 �
 for i, (name, view, risk_level) in enumerate(scenarios, 1):
     print(f"\n🚀 [Scenario {i}: {name}]")
     run_simulation(view, risk_level)
-
 
