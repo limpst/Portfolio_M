@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # LS 증권 API 정보
-APP_KEY = os.getenv('APP_KEY') # "PS3PcDjBuqV26GZypXZi8PAft9CzjQCDsUj8"  # 발급받은 APP Key
-APP_SECRET = os.getenv('APP_SECRET') # "X8pieVLEHskLRBW4nRfRptubGgPw3lnb"  # 발급받은 APP Secret
+APP_KEY = os.getenv('APP_KEY') 
+APP_SECRET = os.getenv('APP_SECRET') 
 
 # API URL 정보
 BASE_URL = "https://openapi.ls-sec.co.kr:8080"
