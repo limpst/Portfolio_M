@@ -201,13 +201,13 @@ def risk_score_to_phrase(score: float, trend: MarketTrend) -> str:
     score = max(2.0, min(10.0, float(score)))
 
     # 기본 방향 문구
-    if trend == MarketTrend.BULLISH:
+    if trend.value == MarketTrend.BULLISH.value:
         direction_word = "상승"
-    elif trend == MarketTrend.BEARISH:
+    elif trend.value == MarketTrend.BEARISH.value:
         direction_word = "하락"
-    elif trend == MarketTrend.VOLATILE:
+    elif trend.value == MarketTrend.VOLATILE.value:
         direction_word = "급변동"
-    elif trend == MarketTrend.REVERSAL:
+    elif trend.value == MarketTrend.REVERSAL.value:
         direction_word = "추세 반전"
     else:  # NEUTRAL
         direction_word = "뚜렷한 방향성 형성"
@@ -226,30 +226,30 @@ def risk_score_to_phrase(score: float, trend: MarketTrend) -> str:
         prob = 60
         mood = "호재와 악재가 혼재된 가운데"
         # NEUTRAL일 때는 약간 중립적으로
-        if trend == MarketTrend.NEUTRAL:
+        if trend.value == MarketTrend.NEUTRAL.value:
             suffix = "단기적으로 제한적인 등락이 반복될 가능성이 큼."
-        elif trend == MarketTrend.VOLATILE:
+        elif trend.value == MarketTrend.VOLATILE.value:
             suffix = "단기적인 등락이 커질 수 있음."
         else:
             suffix = f"{direction_word} 가능성이 다소 우세함."
     elif 6.5 <= score < 8.5:
         prob = 70
         mood = "위험 회피 심리가 강화되면서"
-        if trend == MarketTrend.BULLISH:
+        if trend.value == MarketTrend.BULLISH.value:
             # 위험회피지만 BULLISH라면 ‘상승 제한 + 조정 위험’
             suffix = f"상승 여력이 제한되고 {direction_word}보다 조정 가능성을 염두에 둘 필요가 있음."
-        elif trend == MarketTrend.VOLATILE:
+        elif trend.value == MarketTrend.VOLATILE.value:
             suffix = "단기적으로 급락과 반등이 교차하는 높은 변동성이 예상됨."
         else:
             suffix = f"{direction_word} 가능성이 높음."
     else:  # 8.5 ~ 10.0
         prob = 80
         mood = "극도의 위험 회피 심리로"
-        if trend == MarketTrend.BULLISH:
+        if trend.value == MarketTrend.BULLISH.value:
             suffix = "상승 신뢰도는 낮고 방어적 대응이 요구됨."
-        elif trend == MarketTrend.NEUTRAL:
+        elif trend.value == MarketTrend.NEUTRAL.value:
             suffix = "뚜렷한 방향성은 없지만 급락 리스크에 특히 유의해야 함."
-        elif trend == MarketTrend.VOLATILE:
+        elif trend.value == MarketTrend.VOLATILE.value:
             suffix = "크게 출렁이는 장세가 이어질 가능성이 큼."
         else:
             suffix = f"{direction_word} 가능성이 매우 높음."
@@ -282,8 +282,8 @@ def risk_score_to_phrase(score: float, trend: MarketTrend) -> str:
 #
 # llm = HuggingFacePipeline(pipeline=pipe)
 
-# category LIKE '%KEY'
-
+#    AND category LIKE '%KEY'
+#    AND category LIKE '거시경제%'
 def fetch_latest_news(limit: int = 20):
     """
     news_data 테이블에서 category LIKE '%KEY' 인 최신 뉴스 N개 조회
@@ -298,8 +298,8 @@ def fetch_latest_news(limit: int = 20):
         query = """
                 SELECT date, time, title, body, category
                 FROM news_data
-                WHERE category LIKE '거시경제%'
-                  AND category LIKE '%KEY'
+                WHERE category LIKE '%KEY'            
+                  AND category LIKE '거시경제%'
                 ORDER BY date DESC, time DESC
                     LIMIT %s;
                 """
@@ -327,13 +327,13 @@ def market_scenario_to_tuple(ms: MarketScenario):
 
     # 1) trend 기반 한두 문장 추가 (선택 사항)
     trend_extra = ""
-    if ms.trend == MarketTrend.BULLISH:
+    if ms.trend.value == MarketTrend.BULLISH.value:
         trend_extra = " 전반적으로 상승 우위의 흐름이 형성된 상태입니다."
-    elif ms.trend == MarketTrend.BEARISH:
+    elif ms.trend.value == MarketTrend.BEARISH.value:
         trend_extra = " 전반적으로 하락 압력이 우세한 구간입니다."
-    elif ms.trend == MarketTrend.VOLATILE:
+    elif ms.trend.value == MarketTrend.VOLATILE.value:
         trend_extra = " 방향성보다는 변동성 확대 국면으로 보입니다."
-    elif ms.trend == MarketTrend.REVERSAL:
+    elif ms.trend.value == MarketTrend.REVERSAL.value:
         trend_extra = " 기존 추세에서 방향 전환 신호가 감지되고 있습니다."
     else:   # NEUTRAL
         trend_extra = " 뚜렷한 방향성 없이 관망세가 이어지고 있습니다."
@@ -602,7 +602,7 @@ def calculate_strikes_new(atm: float, risk_aversion: float, iv: float, market_tr
     strikes = [round(strike / 2.5) * 2.5 for strike in strikes]
 
     # 정수로 변환
-    strikes = [int(strike) for strike in strikes]
+    strikes = [float(strike) for strike in strikes]
 
     # 스트라이크 가격이 0 이하로 내려가지 않도록 방지
     strikes = [max(strike, 0) for strike in strikes]
@@ -702,11 +702,17 @@ def execution_reporter(state: QuantState):
     strikes = calculate_strikes_new(atm, risk_aversion, iv, market_trend)
 
     print('Deep OTM Call K (err): '+ str(strikes[0]))
-    strikes[0] = min(strikes[0], 630.0)
-    print('corrected: ' + str(strikes[0]))
+    if True: #
+        strikes[0] = min(strikes[0], 630.0)
+        print('corrected: ' + str(strikes[0]))
+
     # strikes = [atm + 30.0, atm + 22.5, atm - 30.0, atm - 20]
 
     prices, deltas = fetch_option_prices(strikes, atm)
+
+    # debug: Deep OTM Call, OTM Call, Deep OTM Put, OTM Put
+    print("prices: "+str(prices))
+    print("deltas: "+str(deltas))
 
     # 포트폴리오 델타 계산
     port_delta = 0.0
@@ -853,12 +859,12 @@ def get_headers(tr_cd, tr_cont="N"):
 
 def get_kospi200_index():
     """
-    [t2101] KOSPI 200 지수 현재가 조회
+    [t2101] KOSPI 200 지수 현재가 조회   todo: (야간) 코스피 위클리 옵션, (야간) 선물 지수 proxy
     ATM 계산을 위한 기준 가격을 가져옵니다.
     """
     url = f"{API_BASE_URL}/futureoption/market-data"
     headers = get_headers("t2101")
-    data = {"t2101InBlock": {"focode": "101WC000"}}
+    data = {"t2101InBlock": {"focode": "A0163000"}}
 
     try:
         response = requests.post(url, headers=headers, data=json.dumps(data), verify=False)
