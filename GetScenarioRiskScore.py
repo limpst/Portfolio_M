@@ -456,3 +456,4 @@ if __name__ == "__main__":
         print("-" * 60)
         print(f"💡 [투자 전략]\n{scenario.strategy}")
         print("="*60)
+ 
