@@ -16,7 +16,9 @@ from typing import TypedDict, List
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-from LLMTradEx34ScenarioScore import analyze_market_scenario, MarketScenario, MarketTrend, RiskLevel
+from LLMTradEx34ScenarioScore import analyze_market_scenario, MarketScenario, MarketTrend
+
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 load_dotenv()
 
@@ -68,9 +70,9 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, api_key=OPEN_AI_KEY)
 # 자산 정의
 TARGET_ASSETS = [
     {"name": "Deep OTM Call Long"},  # 0. 상승 (볼록성)
-    {"name": "OTM Call Short"},     # 1. 하락/횡보 (수익/헤지)
+    {"name": "OTM Call Short"},  # 1. 하락/횡보 (수익/헤지)
     {"name": "Deep OTM Put Long"},  # 2. 하락 (볼록성)
-    {"name": "OTM Put Short"}       # 3. 상승/횡보 (수익/헤지)
+    {"name": "OTM Put Short"}  # 3. 상승/횡보 (수익/헤지)
 ]
 
 
@@ -79,32 +81,6 @@ TARGET_ASSETS = [
 # [수정 필요] -> 리포팅 단계에서 실시간 델타를 받아와야 정확한 방향성(Bull/Bear) 판단 가능,  # as of 20251209,0328
 real_delta = get_option_greeks(strike=..., type=...)['delta']
 """
-
-def detect_market_trend_with_llm(view_text: str, llm: ChatOpenAI) -> str:
-    """
-    LLM을 사용하여 시장 트렌드를 분석하여 Bullish, Bearish, Neutral 중 하나를 반환
-    """
-    system_prompt = (
-        "당신은 금융 시장 분석가입니다. "
-        "주어진 문장에서 시장의 트렌드를 분석하여 다음 중 하나를 선택하세요: "
-        "'Bullish'(상승), 'Bearish'(하락), 'Neutral'(중립). "
-        "추가적인 설명 없이 오직 하나의 단어만 출력하세요."
-    )
-
-    human_prompt = f"문장: \"{view_text}\"\n시장 트렌드는?"
-
-    # LLM 호출
-    response = llm.invoke([{"role": "system", "content": system_prompt}
-                         , {"role": "user", "content": human_prompt}])
-    market_trend = response.content.strip()
-
-    # 출력이 예상 범위를 벗어난 경우 기본값 반환
-    if market_trend not in ["Bullish", "Bearish", "Neutral"]:
-        market_trend = "Neutral"
-
-    return market_trend
-
-
 
 def fetch_option_price(focode):
     """
@@ -151,13 +127,13 @@ def fetch_option_prices(strikes, atm) -> (List[float], List[float]):
         # 옵션 코드 생성 (Call/Put 구분)
         if strike > atm:
             # Call 옵션 코드
-            focode = f"2AFAQ{int(strike)}"
+            focode = f"201WC{int(strike)}"
         else:
             # Put 옵션 코드
-            focode = f"3AFAQ{int(strike)}"
+            focode = f"301WC{int(strike)}"
 
         # 옵션 가격 조회
-        time.sleep(0.5)
+        time.sleep(1)
         option_data = fetch_option_price(focode)
         if option_data and "price" in option_data:
             # 가격 추출
@@ -253,7 +229,6 @@ def risk_score_to_phrase(score: float, trend: MarketTrend) -> str:
             suffix = f"{direction_word} 가능성이 매우 높음."
 
     return f"{mood} {suffix} (약 {prob}% 수준)"
-
 
 
 #
@@ -559,53 +534,7 @@ def portfolio_optimizer(state: QuantState):
     return {"optimal_weights": weights}
 
 
-def calculate_strikes_new(atm: float, risk_aversion: float, iv: float, market_trend: str) -> List[float]:
-    """
-    risk_aversion, 시장 변동성, 시장 트렌드에 따라 스트라이크를 다이내믹하게 계산합니다.
 
-    Args:
-        atm (float): ATM 기준값 (현재 KOSPI 200 지수)
-        risk_aversion (float): 위험 회피 성향 값 (2.0 ~ 10.0)
-        iv (float): 시장 변동성 (예: 15.0, 30.0)
-        market_trend (str): 시장 트렌드 (Bullish, Bearish, Neutral)
-
-    Returns:
-        List[float]: 계산된 스트라이크 리스트 (OTM 옵션만 포함)
-    """
-    # 기본 간격 설정
-    base_interval = 5.0  # 기본 간격
-    volatility_factor = iv / 15.0  # 변동성에 따른 조정 비율
-    risk_factor = (10.0 - risk_aversion) / 10.0  # 위험 회피 성향에 따른 조정 비율
-    interval = base_interval * volatility_factor * (1 + risk_factor)
-
-    # 시장 트렌드에 따른 가중치 조정
-    if market_trend.lower() == "bullish":
-        trend_weights = [1.2, 1.0, 0.8, 0.6]  # 상승장: Call 옵션에 더 큰 간격
-    elif market_trend.lower() == "bearish":
-        trend_weights = [0.8, 0.6, 1.2, 1.0]  # 하락장: Put 옵션에 더 큰 간격
-    elif market_trend.lower() == "volatile":
-        trend_weights = [1.0, 0.8, 1.0, 0.8]  # 변동성 확대: 균형 잡힌 간격
-    else:  # Neutral
-        trend_weights = [1.0, 1.0, 1.0, 1.0]  # 중립: 기본 간격
-
-    # 스트라이크 계산
-    strikes = [
-        atm + interval * 4 * trend_weights[0],  # Deep OTM Call
-        atm + interval * 2 * trend_weights[1],  # OTM Call
-        atm - interval * 3 * trend_weights[2],  # Deep OTM Put
-        atm - interval * 2 * trend_weights[3]   # OTM Put
-    ]
-
-    # 2.5 단위로 나누어 떨어지도록 조정
-    strikes = [round(strike / 2.5) * 2.5 for strike in strikes]
-
-    # 정수로 변환
-    strikes = [int(strike) for strike in strikes]
-
-    # 스트라이크 가격이 0 이하로 내려가지 않도록 방지
-    strikes = [max(strike, 0) for strike in strikes]
-
-    return strikes
 
 def calculate_strikes(atm: float, risk_aversion: float, iv: float, market_trend: str) -> List[float]:
     """
@@ -637,7 +566,7 @@ def calculate_strikes(atm: float, risk_aversion: float, iv: float, market_trend:
             atm + interval * 3,  # OTM Call
             atm + interval * 2,  # OTM Call
             atm - interval * 4,  # Deep OTM Put
-            atm - interval * 2  # OTM Put
+            atm - interval * 3   # OTM Put
         ]
     else:  # Neutral
         strikes = [
@@ -653,27 +582,9 @@ def calculate_strikes(atm: float, risk_aversion: float, iv: float, market_trend:
     # 정수로 변환
     strikes = [int(strike) for strike in strikes]
 
-    # 스트라이크 가격이 0 이하로 내려가지 않도록 방지
-    strikes = [max(strike, 0) for strike in strikes]
-
     return strikes
 
 # strikes = calculate_strikes(590, 2.0)
-
-
-def map_risk_level(score: float) -> RiskLevel:
-    """
-    숫자 기반 위험 수준을 RiskLevel Enum으로 매핑
-    """
-    if score < 3.0:
-        return RiskLevel.LOW
-    elif 3.0 <= score < 6.0:
-        return RiskLevel.MODERATE
-    elif 6.0 <= score < 8.0:
-        return RiskLevel.HIGH
-    else:
-        return RiskLevel.EXTREME
-
 
 # ==========================================
 # 3. Node: Reporter
@@ -684,7 +595,7 @@ def execution_reporter(state: QuantState):
     weights = state['optimal_weights']
     view = state['manager_view']
     risk_aversion = state['risk_aversion']
-    iv = state['market_iv']                 # 시장 변동성
+    iv = state['market_iv']     # 시장 변동성
     market_trend = state['market_trend']
 
     if not weights: return {"final_report": "Optimization Failed"}
@@ -694,10 +605,9 @@ def execution_reporter(state: QuantState):
 
     atm = round(kospi / 2.5) * 2.5
 
-    market_trend = detect_market_trend_with_llm(view, llm)
 
     # 스트라이크 계산 (risk_aversion, iv, market_trend 기반)
-    strikes = calculate_strikes_new(atm, risk_aversion, iv, market_trend)
+    strikes = calculate_strikes(atm, risk_aversion, iv, market_trend)
 
     # strikes = [atm + 30.0, atm + 22.5, atm - 30.0, atm - 20]
 
@@ -865,28 +775,25 @@ def get_kospi200_index():
         return 0.0  # 기본값 반환
 
 
-def run_simulation(view_text: str, llm: ChatOpenAI, risk_level: float = 3.0):
+def run_simulation(view_text: str, risk_level: float = 3.0):
     kospi_index = get_kospi200_index()
-
     if kospi_index == 0:
         print("⚠️ KOSPI 200 지수를 가져오지 못해 시뮬레이션을 건너뜁니다.")
         return
 
-    # # 시장 트렌드 해석 (Bullish, Bearish, Neutral)
-    # if "bull" in view_text.lower():
-    #     market_trend = "Bullish"
-    # elif "bear" in view_text.lower():
-    #     market_trend = "Bearish"
-    # else:
-    #     market_trend = "Neutral"
-
-    market_trend = detect_market_trend_with_llm(view_text, llm)
+    # 시장 트렌드 해석 (Bullish, Bearish, Neutral)
+    if "bull" in view_text.lower():
+        market_trend = "Bullish"
+    elif "bear" in view_text.lower():
+        market_trend = "Bearish"
+    else:
+        market_trend = "Neutral"
 
     inputs = {
-        "kospi_index": kospi_index, "market_iv": 27.35, "total_capital": 5_000_000, ### 시장 데이터 입수
+        "kospi_index": kospi_index, "market_iv": 30.95, "total_capital": 5_000_000, ### 시장 데이터 입수
         "manager_view": view_text, "risk_aversion": risk_level,
         "expected_returns": [], "covariance_matrix": [], "optimal_weights": [], "final_report": "",
-        "market_trend": market_trend
+        "market_trend" : market_trend
     }
 
     try:
@@ -894,7 +801,6 @@ def run_simulation(view_text: str, llm: ChatOpenAI, risk_level: float = 3.0):
         print(result['final_report'])
     except Exception as e:
         print(f"❌ Simulation Error: {e}")
-
 
 test_news = fetch_latest_news(20)   # 최근 뉴스 20 개 가져오기
 
@@ -929,5 +835,5 @@ scenarios = [market_scenario_to_tuple(market_scenario)] # 시나리오 튜블 �
 
 for i, (name, view, risk_level) in enumerate(scenarios, 1):
     print(f"\n🚀 [Scenario {i}: {name}]")
-    run_simulation(view, llm, risk_level)
+    run_simulation(view, risk_level)
 
