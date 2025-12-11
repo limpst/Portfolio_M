@@ -13,6 +13,7 @@ from langchain_community.chat_models import ChatLlamaCpp
 from huggingface_hub import hf_hub_download
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from llama_cpp import Llama
 from mysql.connector import pooling
 from html import unescape
 from LLMTradEx34ScenarioScore import MarketScenario
@@ -74,10 +75,20 @@ except Exception as e:
 # 2. LLM 초기화 (요약 + 분류 겸용: Qwen2.5-7B-Instruct GGUF)
 #    → CPU/메모리 부담 고려한 보수적 설정
 # ==========================================
+# repo_idSum = "Qwen/Qwen2.5-3B-Instruct-GGUF"
+# filenameSum = "qwen2.5-3b-instruct-q4_k_m.gguf"
 
 # 7B 모델 (RAM 6~8GB 이상 권장)
 repo_idSum = "bartowski/Qwen2.5-7B-Instruct-GGUF"
 filenameSum = "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+
+# 14B 모델 (RAM 12~16GB 이상 권장, GPU VRAM 8GB이면 Q4 계열 + n_gpu_layers 조정 필요)
+# repo_idSum = "bartowski/Qwen2.5-14B-Instruct-GGUF"
+# filenameSum = "Qwen2.5-14B-Instruct-Q4_K_M.gguf"
+
+# Hugging Face 고속 다운로드 기능 비활성화 (DNS 에러 회피 시도)
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 print(f"⏳ [System] GGUF 모델 다운로드/로드 중: {repo_idSum}...")
 
@@ -87,19 +98,29 @@ model_pathSum = hf_hub_download(
     cache_dir='v:/PythonProject/hf_cache_gguf'
 )
 
+# [수정 후] 직접 다운로드한 파일의 전체 경로를 입력하세요
+# model_pathSum = "v:/PythonProject/hf_cache_gguf/Qwen2.5-14B-Instruct-Q4_K_M.gguf"
+
 # LLM 호출 직렬화를 위한 전역 락
 llm_lock = threading.Lock()
+
+# GPU 메모리 최적화 설정 (PyTorch)
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True  # GPU 성능 최적화
+    torch.cuda.empty_cache()  # GPU 캐시 초기화
+    # torch.cuda.memory_summary(device=None, abbreviated=False)
+
 
 llmSum = ChatLlamaCpp(
     model_path=model_pathSum,
     n_gpu_layers=-1,  # GPU에서 처리할 레이어 수   # GPU 없으면 0, GPU 있으면 10~20으로 올려도 됨
     n_batch=1024,  # 배치 크기 줄여 메모리 피크 완화
-    n_ctx=4096,  # 1536,  # 7B에 4096은 무거우므로 1536 선에서 타협
+    n_ctx=2000,  # 1536,  # 7B에 4096은 무거우므로 1536 선에서 타협
     # 7B + CPU: 너무 높지 않게 (물리 코어 50~70% 수준, 최대 6)
     temperature=0.1,
-    max_tokens=512,     # 출력 최대 길이
+    max_tokens=1024,     # 출력 최대 길이
     repeat_penalty=1.15,
-    verbose=False,
+    verbose=True,
     streaming=False,
     stop=["<|im_end|>", "<|endoftext|>", "<|end_of_text|>"]
 )
@@ -284,7 +305,7 @@ def summarize_and_classify(text: str, title: str) -> tuple[str, str]:
     kw_category = quick_keyword_classify(title)
 
     # 청크 크기를 키워 호출 횟수 감소
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=100)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
     chunks = text_splitter.split_text(text)
 
     def _llm_summary_single(chunk_text: str) -> str:
@@ -306,6 +327,9 @@ def summarize_and_classify(text: str, title: str) -> tuple[str, str]:
         # 반드시 락으로 감싸서 한 번에 하나만 호출
         with llm_lock:
             response = llmSum.invoke([system_message, human_message])
+
+        # VRAM 상태 확인
+        check_vram_usage()
 
         result = response.content.strip()
         result = re.sub(r"^(\s*요약\s*[:\-\]]?|.*?요약해\s*드리겠습니다[.]?)", "", result).strip()
@@ -367,6 +391,10 @@ def summarize_and_classify(text: str, title: str) -> tuple[str, str]:
                     SystemMessage(content=system_instruction),
                     HumanMessage(content=user_content)
                 ])
+
+            # VRAM 상태 확인
+            check_vram_usage()
+
             result = response.content.strip()
             valid_categories = ["거시경제", "해외 증시", "국내 시황", "주도 섹터", "기타"]
 
@@ -494,10 +522,14 @@ def worker():
     """대기열에서 뉴스를 꺼내 처리하는 소비자 함수"""
     print("🚀 뉴스 처리 워커(Worker) 시작됨...")
     while True:
+        news_item = news_queue.get()  # 여기서 블록됨
         try:
-            news_item = news_queue.get()
+            # 종료 신호 처리
             if news_item is None:
-                break  # 종료 신호
+                # None 자체에 대해서도 task_done()은 해줘야 함
+                # (메인 스레드에서 put(None)을 했으므로)
+                print("🛑 워커 종료 신호 수신")
+                return  # break 대신 return으로 함수 종료
 
             # debug (사용자 요청: 기존 print 유지)
             print(f"날짜: {news_item.get('date')}")
@@ -543,20 +575,20 @@ def worker():
                 )
 
                 # 3. DB 저장
-                if "기타" not in category and "주도 섹터" not in category:  # True:  # and "주도 섹터" not in category
+                if "기타" not in category and "주도 섹터" not in category:
                     insert_to_db(db_data)
                     print(f"✅ DB 저장 완료: {title} (카테고리: {category})")
                 else:
                     print(f"🚫 '기타', '주도 섹터' 카테고리로 분류된 뉴스는 저장하지 않습니다: {title}\n")
 
-
             else:
                 print("⚠️ 본문 없음, 건너뜀.")
 
-            news_queue.task_done()
-
         except Exception as e:
             print(f"\n❌ 워커 처리 중 에러: {e}")
+        finally:
+            # ✅ get()이 성공한 모든 경우(정상, 예외, 종료신호)에서 정확히 1번 호출
+            news_queue.task_done()
 
 
 # ==========================================
